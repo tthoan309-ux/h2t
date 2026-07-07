@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Generated experiment artifacts can be reproduced and may be large/noisy.
+outputs/
+outputs_verify/
+
+# Local/editor files
+.vscode/
+.idea/
+.DS_Store
