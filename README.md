@@ -236,6 +236,40 @@ Then run the final fair comparison using the same iteration budget for ALNS-Base
 python main.py --data ..\Data_B --out outputs --use-best-config outputs\tuning\best_config.json --iterations 5000 --seeds 1,2,3,4,5
 ```
 
+### One-Command Pipeline
+
+To run the staged workflow in order, use the PowerShell pipeline:
+
+```powershell
+.\scripts\run_tuning_pipeline.ps1
+```
+
+or the Windows wrapper:
+
+```cmd
+scripts\run_tuning_pipeline.cmd
+```
+
+The default pipeline runs:
+
+1. quick debug tuning,
+2. screening random search,
+3. focused tuning,
+4. validation on unseen seeds,
+5. final fair comparison.
+
+For a lighter run:
+
+```powershell
+.\scripts\run_tuning_pipeline.ps1 -ScreeningConfigs 10 -ScreeningIterations 200 -FocusedConfigs 5 -FocusedIterations 500 -ValidationIterations 1000 -FinalIterations 1000
+```
+
+To resume from focused tuning after screening already completed:
+
+```powershell
+.\scripts\run_tuning_pipeline.ps1 -SkipQuick -SkipScreening
+```
+
 Custom tuning grid:
 
 ```bash
