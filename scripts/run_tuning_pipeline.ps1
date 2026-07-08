@@ -27,16 +27,16 @@ $ErrorActionPreference = "Stop"
 function Invoke-Step {
     param(
         [string]$Name,
-        [string[]]$Args
+        [string[]]$StepArgs
     )
 
     Write-Host ""
     Write-Host "============================================================"
     Write-Host $Name
     Write-Host "============================================================"
-    Write-Host "$Python $($Args -join ' ')"
+    Write-Host "$Python $($StepArgs -join ' ')"
 
-    & $Python @Args
+    & $Python @StepArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Step failed: $Name (exit code $LASTEXITCODE)"
     }
@@ -53,7 +53,7 @@ if (-not $NoResume) {
 # 3) focused sau hon tren vung tot,
 # 4) validation/final comparison voi best_config.
 if (-not $SkipQuick) {
-    Invoke-Step "Stage 1 - Quick debug tuning" @(
+    $stepArgs = @(
         "main.py",
         "--data", $Data,
         "--out", $Out,
@@ -63,11 +63,13 @@ if (-not $SkipQuick) {
         "--tune-seeds", "1",
         "--max-configs", "$QuickMaxConfigs",
         "--debug"
-    ) + $resumeArgs
+    )
+    $stepArgs += $resumeArgs
+    Invoke-Step "Stage 1 - Quick debug tuning" $stepArgs
 }
 
 if (-not $SkipScreening) {
-    Invoke-Step "Stage 2 - Screening random search" @(
+    $stepArgs = @(
         "main.py",
         "--data", $Data,
         "--out", $Out,
@@ -79,11 +81,13 @@ if (-not $SkipScreening) {
         "--tune-seeds", $ScreeningSeeds,
         "--tuning-stage", "screening",
         "--tune-light"
-    ) + $resumeArgs
+    )
+    $stepArgs += $resumeArgs
+    Invoke-Step "Stage 2 - Screening random search" $stepArgs
 }
 
 if (-not $SkipFocused) {
-    Invoke-Step "Stage 3 - Focused tuning" @(
+    $stepArgs = @(
         "main.py",
         "--data", $Data,
         "--out", $Out,
@@ -94,7 +98,9 @@ if (-not $SkipFocused) {
         "--iterations", "$FocusedIterations",
         "--tune-seeds", $FocusedSeeds,
         "--tuning-stage", "focused"
-    ) + $resumeArgs
+    )
+    $stepArgs += $resumeArgs
+    Invoke-Step "Stage 3 - Focused tuning" $stepArgs
 }
 
 $bestConfig = Join-Path $Out "tuning\best_config.json"

@@ -241,14 +241,16 @@ python main.py --data ..\Data_B --out outputs --use-best-config outputs\tuning\b
 To run the staged workflow in order, use the PowerShell pipeline:
 
 ```powershell
-.\scripts\run_tuning_pipeline.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run_tuning_pipeline.ps1
 ```
 
-or the Windows wrapper:
+or the Windows wrapper, which already applies the bypass flag:
 
 ```cmd
 scripts\run_tuning_pipeline.cmd
 ```
+
+If direct `.\scripts\run_tuning_pipeline.ps1` fails with "running scripts is disabled", use one of the two commands above.
 
 The default pipeline runs:
 

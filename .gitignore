@@ -9,6 +9,7 @@ env/
 outputs/
 outputs_verify/
 outputs_stage_test/
+outputs_policy_test/
 
 # Local/editor files
 .vscode/

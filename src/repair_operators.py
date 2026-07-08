@@ -8,7 +8,7 @@ from typing import Any
 
 from .feasibility import apply_insertion, best_insertion_positions
 from .objective import evaluate_solution
-from .opportunity_cost import compute_feasibility_opportunity_cost, compute_postponement_increment
+from .opportunity_cost import compute_feasibility_opportunity_cost, compute_opportunity_index, compute_postponement_increment
 
 
 def _finish(solution, removed: list[str], context: dict[str, Any]):
@@ -88,7 +88,11 @@ def opportunity_cost_insertion(solution, removed: list[str], context: dict[str, 
             limit = int(context.get("opportunity_candidate_limit", 3 if context.get("tune_light", False) else 5))
             positions = best_insertion_positions(out, c, context, limit=limit)
             for pos in positions:
-                feasibility_oc = compute_feasibility_opportunity_cost(c, out, pos["day"], context)
+                if context.get("tune_light", False):
+                    # Screening can dung nhanh de xep hang config. Dung index nhe tranh quet future insertion qua sau.
+                    feasibility_oc = compute_opportunity_index(c, out, pos["day"], context, pos["cost"]) * 1000.0
+                else:
+                    feasibility_oc = compute_feasibility_opportunity_cost(c, out, pos["day"], context)
                 postponement_increment = compute_postponement_increment(c, pos["day"], context)
                 delivery_day_increment = float(pos["day"] - min(context["days"]))
                 adjusted = pos["cost"] - eta * feasibility_oc + theta * postponement_increment + phi * delivery_day_increment
