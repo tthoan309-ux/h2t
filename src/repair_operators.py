@@ -85,7 +85,8 @@ def opportunity_cost_insertion(solution, removed: list[str], context: dict[str, 
     while pending:
         best = None
         for c in pending:
-            positions = best_insertion_positions(out, c, context, limit=5)
+            limit = int(context.get("opportunity_candidate_limit", 3 if context.get("tune_light", False) else 5))
+            positions = best_insertion_positions(out, c, context, limit=limit)
             for pos in positions:
                 feasibility_oc = compute_feasibility_opportunity_cost(c, out, pos["day"], context)
                 postponement_increment = compute_postponement_increment(c, pos["day"], context)
@@ -109,17 +110,24 @@ def early_day_repair(solution, removed: list[str], context: dict[str, Any], rng:
     while pending:
         best = None
         base_objective = evaluate_solution(out, context).objective_value
+        attempts = 0
+        max_attempts = int(context.get("early_day_repair_max_attempts", 30 if context.get("tune_light", False) else 10_000))
         for c in pending:
             positions = best_insertion_positions(out, c, context)
             if not positions:
                 continue
             earliest_day = min(p["day"] for p in positions)
             for pos in [p for p in positions if p["day"] == earliest_day]:
+                attempts += 1
+                if attempts > max_attempts:
+                    break
                 candidate = apply_insertion(out, pos, context)
                 objective_delta = evaluate_solution(candidate, context).objective_value - base_objective
                 key = (pos["day"], objective_delta, pos["cost"])
                 if best is None or key < best["key"]:
                     best = {"customer": c, "insertion": pos, "key": key}
+            if attempts > max_attempts:
+                break
         if best is None:
             break
         out = apply_insertion(out, best["insertion"], context)

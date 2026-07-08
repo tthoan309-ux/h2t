@@ -33,7 +33,7 @@ def aggregate_tuning_results(output_dir: str | Path, logger: logging.Logger | No
     if not raw_path.exists():
         raise FileNotFoundError(raw_path)
     raw = pd.read_csv(raw_path)
-    success = raw[raw["status"] == "success"].copy()
+    success = raw[raw["status"].isin(["success", "early_stopped"])].copy()
     if success.empty:
         raise ValueError("No successful tuning rows to aggregate.")
 

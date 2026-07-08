@@ -8,8 +8,10 @@ env/
 # Generated experiment artifacts can be reproduced and may be large/noisy.
 outputs/
 outputs_verify/
+outputs_stage_test/
 
 # Local/editor files
 .vscode/
 .idea/
+.codegraph/
 .DS_Store

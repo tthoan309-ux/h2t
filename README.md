@@ -161,6 +161,45 @@ This only checks that tuning code, resume mode, and CSV exports work. Do not use
 python main.py --data ..\Data_B --out outputs --tune --tune-mode quick --iterations 100 --tune-seeds 1 --max-configs 5 --debug --resume
 ```
 
+### Successive Halving Presets
+
+The project supports `--tuning-stage` presets. This is the recommended way to avoid running broad and deep tuning at the same time.
+
+Screening:
+
+```bash
+python main.py --data ..\Data_B --out outputs --tune --tune-mode full --search-strategy random --n-configs 20 --iterations 200 --tune-seeds 1 --tuning-stage screening --tune-light --resume
+```
+
+Focused:
+
+```bash
+python main.py --data ..\Data_B --out outputs --tune --tune-mode full --search-strategy random --n-configs 10 --iterations 800 --tune-seeds 1,2,3 --tuning-stage focused --resume
+```
+
+Validation:
+
+```bash
+python main.py --data ..\Data_B --out outputs --use-best-config outputs\tuning\best_config.json --iterations 3000 --seeds 1,2,3,4,5
+```
+
+During tuning, early stopping is enabled by default:
+
+```text
+patience = 150
+min_improvement = 1000
+```
+
+If the best objective does not improve enough during the patience window, the current run stops early and is recorded as `early_stopped`. Poor configs can also be marked `pruned` after enough iterations. Checkpoints are written every 50 iterations to:
+
+```text
+outputs/tuning/tuning_checkpoints.csv
+```
+
+This file is useful when a long tuning process is interrupted manually: the current run may not have reached `tuning_results_raw.csv`, but its intermediate best metrics are still visible.
+
+`--tune-light` is intended for screening only. It reduces expensive repair/local-search behavior while keeping feasibility exact. Final validation should run without light mode.
+
 ### Stage 2: Screening Search
 
 Use random search to sample the full space without enumerating all combinations.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -54,6 +55,19 @@ RAW_COLUMNS = [
     "error_message",
 ]
 
+CHECKPOINT_COLUMNS = [
+    "config_id",
+    "seed",
+    "iteration",
+    "best_objective",
+    "delivered_orders",
+    "undelivered_orders",
+    "total_distance",
+    "total_waiting_time",
+    "postponement_penalty",
+    "status",
+]
+
 
 def run_grid_search(
     data_bundle: dict[str, Any],
@@ -66,6 +80,10 @@ def run_grid_search(
     max_configs: int | None = None,
     parallel: int | None = None,
     logger: logging.Logger | None = None,
+    early_stop: bool = True,
+    patience: int = 150,
+    min_improvement: float = 1000.0,
+    tune_light: bool = False,
 ) -> pd.DataFrame:
     """Run ALNS-OC grid search and write raw/summary tuning outputs."""
 
@@ -73,7 +91,9 @@ def run_grid_search(
     tuning_dir = Path(output_dir) / "tuning"
     tuning_dir.mkdir(parents=True, exist_ok=True)
     raw_path = tuning_dir / "tuning_results_raw.csv"
+    checkpoint_path = tuning_dir / "tuning_checkpoints.csv"
     _ensure_raw_file(raw_path)
+    _ensure_checkpoint_file(checkpoint_path)
 
     configs = param_grid[: max_configs or len(param_grid)]
     completed = _completed_pairs(raw_path) if resume else set()
@@ -84,21 +104,61 @@ def run_grid_search(
     # Dung chung initial solution theo seed de khong phai dung lai nghiem khoi tao cho moi config.
     # Feasibility cua initial khong phu thuoc eta/theta/phi, nen tai su dung giup tuning nhanh hon rat nhieu.
     initial_by_seed = _build_initial_solutions(data_bundle, base_config, seeds, logger)
+    checkpoint_lock = threading.Lock()
+    best_reference = _current_best_objective(raw_path)
 
     # Nhieu seed la can thiet vi ALNS co thanh phan ngau nhien; mot debug run co the qua may hoac qua xui.
     progress = _progress_bar(total_jobs, "Tuning configs")
     if parallel and parallel > 1:
         with ThreadPoolExecutor(max_workers=parallel) as executor:
-            futures = [executor.submit(_run_one_config_seed, data_bundle, base_config, config, seed, iterations, logger, initial_by_seed.get(seed)) for config, seed in jobs]
+            futures = [
+                executor.submit(
+                    _run_one_config_seed,
+                    data_bundle,
+                    base_config,
+                    config,
+                    seed,
+                    iterations,
+                    logger,
+                    initial_by_seed.get(seed),
+                    checkpoint_path,
+                    checkpoint_lock,
+                    best_reference,
+                    early_stop,
+                    patience,
+                    min_improvement,
+                    tune_light,
+                )
+                for config, seed in jobs
+            ]
             for idx, future in enumerate(as_completed(futures), start=1):
                 row = future.result()
                 _append_row(raw_path, row)
+                if row["status"] in {"success", "early_stopped"} and row.get("objective") not in {"", None}:
+                    best_reference = min(best_reference or float(row["objective"]), float(row["objective"]))
                 _advance_progress(progress, row)
                 logger.info("Tuning progress %d/%d config=%s seed=%s status=%s", idx, total_jobs, row["config_id"], row["seed"], row["status"])
     else:
         for idx, (config, seed) in enumerate(jobs, start=1):
-            row = _run_one_config_seed(data_bundle, base_config, config, seed, iterations, logger, initial_by_seed.get(seed))
+            row = _run_one_config_seed(
+                data_bundle,
+                base_config,
+                config,
+                seed,
+                iterations,
+                logger,
+                initial_by_seed.get(seed),
+                checkpoint_path,
+                checkpoint_lock,
+                best_reference,
+                early_stop,
+                patience,
+                min_improvement,
+                tune_light,
+            )
             _append_row(raw_path, row)
+            if row["status"] in {"success", "early_stopped"} and row.get("objective") not in {"", None}:
+                best_reference = min(best_reference or float(row["objective"]), float(row["objective"]))
             _advance_progress(progress, row)
             logger.info("Tuning progress %d/%d config=%s seed=%s status=%s", idx, total_jobs, row["config_id"], seed, row["status"])
     _close_progress(progress)
@@ -124,6 +184,13 @@ def _run_one_config_seed(
     iterations: int,
     logger: logging.Logger,
     initial_solution=None,
+    checkpoint_path: Path | None = None,
+    checkpoint_lock: threading.Lock | None = None,
+    best_reference: float | None = None,
+    early_stop: bool = True,
+    patience: int = 150,
+    min_improvement: float = 1000.0,
+    tune_light: bool = False,
 ) -> dict[str, Any]:
     """Run one config/seed pair and return one raw result row."""
 
@@ -134,6 +201,21 @@ def _run_one_config_seed(
     start = time.perf_counter()
     try:
         context = _context_for_config(data_bundle, base_config, config)
+        context.update(
+            {
+                "early_stop": early_stop,
+                "patience": patience,
+                "min_improvement": min_improvement,
+                "checkpoint_interval": 50,
+                "checkpoint_callback": _make_checkpoint_callback(checkpoint_path, checkpoint_lock, config["config_id"], seed),
+                "prune_after_iterations": 200,
+                "prune_reference_objective": best_reference,
+                "prune_gap": 0.15,
+                "tune_light": tune_light,
+                "local_search": False if tune_light else context.get("local_search", True),
+                "max_positions_per_route": min(int(context.get("max_positions_per_route", 16)), 8) if tune_light else context.get("max_positions_per_route", 16),
+            }
+        )
         rng = set_seed(seed)
         initial = initial_solution.copy() if initial_solution is not None else regret_insertion_initial_solution(context, logger)
         solution, history, _ops = run_alns(initial, context, iterations, rng, variant="oc", logger=logger, debug=False)
@@ -142,7 +224,7 @@ def _run_one_config_seed(
         row["runtime_seconds"] = time.perf_counter() - start
         row["accepted_solutions"] = int(history["accepted"].sum()) if not history.empty and "accepted" in history else 0
         row["best_iteration"] = int(history.loc[history["best_objective"].idxmin(), "iteration"]) if not history.empty else 0
-        row["status"] = "success"
+        row["status"] = solution.metrics.get("run_status", "success")
         row["error_message"] = ""
     except Exception as exc:
         # Mot config hong khong duoc lam dung toan bo grid; can ghi lai de phan tich sau.
@@ -157,13 +239,19 @@ def _build_initial_solutions(data_bundle: dict[str, Any], base_config: dict[str,
     """Build one reusable initial solution per seed before the grid loop."""
 
     initials = {}
+    if not seeds:
+        return initials
+    # Initial hien tai deterministic, nen build mot lan roi deep-copy cho moi seed. Neu sau nay initial co random,
+    # chi can doi ham nay de build theo seed; cac module tuning khac khong bi anh huong.
+    first_seed = seeds[0]
+    set_seed(first_seed)
+    context = dict(data_bundle)
+    context.update(base_config)
+    logger.info("Building reusable initial solution for tuning seed=%s", first_seed)
+    initial = regret_insertion_initial_solution(context, logger)
     for seed in seeds:
-        # Seed van duoc set de neu initial co thanh phan ngau nhien trong tuong lai thi ket qua van reproducible.
-        set_seed(seed)
-        context = dict(data_bundle)
-        context.update(base_config)
-        logger.info("Building reusable initial solution for tuning seed=%s", seed)
-        initials[seed] = regret_insertion_initial_solution(context, logger)
+        logger.info("Reusing cached initial solution for tuning seed=%s", seed)
+        initials[seed] = initial.copy()
     return initials
 
 
@@ -198,12 +286,63 @@ def _ensure_raw_file(path: Path) -> None:
             csv.DictWriter(f, fieldnames=RAW_COLUMNS).writeheader()
 
 
+def _ensure_checkpoint_file(path: Path) -> None:
+    """Create checkpoint CSV with headers if needed."""
+
+    if not path.exists():
+        with path.open("w", newline="", encoding="utf-8-sig") as f:
+            csv.DictWriter(f, fieldnames=CHECKPOINT_COLUMNS).writeheader()
+
+
 def _append_row(path: Path, row: dict[str, Any]) -> None:
     """Append one raw row immediately so long tuning runs are resumable."""
 
     with path.open("a", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=RAW_COLUMNS, extrasaction="ignore")
         writer.writerow(row)
+
+
+def _append_checkpoint(path: Path, row: dict[str, Any], lock: threading.Lock | None = None) -> None:
+    """Append one checkpoint row immediately."""
+
+    if path is None:
+        return
+    if lock:
+        with lock:
+            _append_checkpoint(path, row, None)
+        return
+    with path.open("a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=CHECKPOINT_COLUMNS, extrasaction="ignore")
+        writer.writerow(row)
+
+
+def _make_checkpoint_callback(path: Path | None, lock: threading.Lock | None, config_id: str, seed: int):
+    """Create a callback consumed by run_alns for tuning checkpoints."""
+
+    if path is None:
+        return None
+
+    def callback(iteration: int, solution, status: str) -> None:
+        # Checkpoint giup Ctrl+C khong lam mat het tien do cua run dang chay.
+        metrics = solution.metrics
+        _append_checkpoint(
+            path,
+            {
+                "config_id": config_id,
+                "seed": seed,
+                "iteration": iteration,
+                "best_objective": solution.objective_value,
+                "delivered_orders": metrics.get("delivered_orders", ""),
+                "undelivered_orders": metrics.get("undelivered_orders", ""),
+                "total_distance": metrics.get("total_distance", ""),
+                "total_waiting_time": metrics.get("total_waiting_time", ""),
+                "postponement_penalty": metrics.get("postponement_penalty", ""),
+                "status": status,
+            },
+            lock,
+        )
+
+    return callback
 
 
 def _completed_pairs(path: Path) -> set[tuple[str, int]]:
@@ -215,8 +354,22 @@ def _completed_pairs(path: Path) -> set[tuple[str, int]]:
     if df.empty:
         return set()
     # Resume quan trong vi full grid co the chay hang gio/ngay; khong nen mat ket qua da xong.
-    done = df[df["status"] == "success"]
+    done = df[df["status"].isin(["success", "early_stopped"])]
     return {(str(row.config_id), int(row.seed)) for row in done.itertuples(index=False)}
+
+
+def _current_best_objective(path: Path) -> float | None:
+    """Return best successful objective already available for pruning reference."""
+
+    if not path.exists():
+        return None
+    df = pd.read_csv(path)
+    if df.empty or "objective" not in df:
+        return None
+    good = df[df["status"].isin(["success", "early_stopped"])].copy()
+    if good.empty:
+        return None
+    return float(good["objective"].min())
 
 
 def _progress_bar(total: int, desc: str):

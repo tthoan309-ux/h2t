@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data", required=True, help="Path to Data_B.zip or a folder containing the CSV files.")
     parser.add_argument("--out", default="outputs", help="Output directory.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--iterations", type=int, default=5000, help="ALNS iterations per variant.")
+    parser.add_argument("--iterations", type=int, help="ALNS iterations per variant.")
     parser.add_argument("--debug", action="store_true", help="Use more verbose logging.")
     parser.add_argument("--tune", action="store_true", help="Enable ALNS-OC parameter tuning mode.")
     parser.add_argument("--tune-mode", choices=["quick", "full", "custom"], default="quick", help="Parameter grid size/source.")
@@ -82,6 +82,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-configs", type=int, help="Optional maximum number of tuning configs.")
     parser.add_argument("--resume", action="store_true", help="Skip successful config/seed rows already in tuning raw CSV.")
     parser.add_argument("--parallel", type=int, help="Optional number of parallel tuning workers.")
+    parser.add_argument("--tuning-stage", choices=["screening", "focused", "validation"], help="Successive-halving tuning stage preset.")
+    parser.add_argument("--early-stop", dest="early_stop", action="store_true", help="Enable early stopping inside tuning runs.")
+    parser.add_argument("--no-early-stop", dest="early_stop", action="store_false", help="Disable early stopping inside tuning runs.")
+    parser.set_defaults(early_stop=None)
+    parser.add_argument("--patience", type=int, help="Early-stop patience in ALNS iterations.")
+    parser.add_argument("--min-improvement", type=float, help="Minimum objective improvement needed to reset patience.")
+    parser.add_argument("--tune-light", action="store_true", help="Use lighter operators/settings for fast screening.")
     parser.add_argument("--use-best-config", help="Path to outputs/tuning/best_config.json for final tuned runs.")
     parser.add_argument("--seeds", help="Comma-separated seeds for final repeated tuned runs.")
     return parser.parse_args()
@@ -91,6 +98,9 @@ def main() -> None:
     """Run the full experiment workflow."""
 
     args = parse_args()
+    _apply_stage_defaults(args)
+    if args.iterations is None:
+        args.iterations = 5000
     if args.debug and args.iterations > 300:
         args.iterations = 300
     ensure_dirs(args.out)
@@ -128,6 +138,10 @@ def main() -> None:
             max_configs=args.max_configs,
             parallel=args.parallel,
             logger=logger,
+            early_stop=True if args.early_stop is None else args.early_stop,
+            patience=args.patience if args.patience is not None else 150,
+            min_improvement=args.min_improvement if args.min_improvement is not None else 1000.0,
+            tune_light=args.tune_light,
         )
         best = summary.iloc[0]
         print("\nTuning summary:")
@@ -162,6 +176,27 @@ def _parse_seeds(text: str) -> list[int]:
     """Parse comma-separated seed text."""
 
     return [int(part.strip()) for part in text.split(",") if part.strip()]
+
+
+def _apply_stage_defaults(args: argparse.Namespace) -> None:
+    """Apply successive-halving defaults before running tuning."""
+
+    if not args.tune or not args.tuning_stage:
+        return
+    # Successive halving: rong truoc, sau do moi tang seed/iterations cho vung tham so co trien vong.
+    if args.tuning_stage == "screening":
+        args.n_configs = args.n_configs or 20
+        args.tune_seeds = args.tune_seeds if args.tune_seeds != "42" else "1"
+        args.iterations = args.iterations or 200
+        args.tune_light = True if not args.tune_light else args.tune_light
+    elif args.tuning_stage == "focused":
+        args.n_configs = args.n_configs or 10
+        args.tune_seeds = args.tune_seeds if args.tune_seeds != "42" else "1,2,3"
+        args.iterations = args.iterations or 800
+    elif args.tuning_stage == "validation":
+        args.n_configs = args.n_configs or 1
+        args.tune_seeds = args.tune_seeds if args.tune_seeds != "42" else "1,2,3,4,5"
+        args.iterations = args.iterations or 3000
 
 
 def _apply_tuned_config(context: dict, config: dict) -> dict:

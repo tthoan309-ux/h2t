@@ -38,6 +38,9 @@ def run_alns(
             repair_ops.pop("early_day_repair", None)
         if not context.get("use_slack_penalty", True):
             repair_ops.pop("slack_aware_insertion", None)
+        if context.get("tune_light", False):
+            # Screening chi can xep hang nhanh config tiem nang, nen bo operator rat nang.
+            repair_ops.pop("regret3_insertion", None)
     destroy_weights = {name: 1.0 for name in destroy_ops}
     repair_weights = {name: 1.0 for name in repair_ops}
     d_score = {name: 0.0 for name in destroy_ops}
@@ -51,6 +54,17 @@ def run_alns(
     start = time.perf_counter()
     iteration_rows = []
     operator_rows = []
+    stop_reason = "success"
+    best_checkpoint_objective = best.objective_value
+    last_significant_improvement = 0
+    early_stop = bool(context.get("early_stop", False))
+    patience = int(context.get("patience", 150))
+    min_improvement = float(context.get("min_improvement", 1000.0))
+    checkpoint_interval = int(context.get("checkpoint_interval", 0))
+    checkpoint_callback = context.get("checkpoint_callback")
+    prune_after = int(context.get("prune_after_iterations", 0))
+    prune_reference = context.get("prune_reference_objective")
+    prune_gap = float(context.get("prune_gap", 0.15))
 
     for iteration in range(1, iterations + 1):
         d_name = roulette_choice(destroy_weights, rng)
@@ -78,6 +92,9 @@ def run_alns(
             current = candidate
             accepted = True
             reward = 30
+            if best_checkpoint_objective - best.objective_value >= min_improvement:
+                best_checkpoint_objective = best.objective_value
+                last_significant_improvement = iteration
         elif delta < 0:
             current = candidate
             reward = 10
@@ -135,7 +152,28 @@ def run_alns(
                 temperature,
             )
 
+        if checkpoint_interval > 0 and checkpoint_callback and iteration % checkpoint_interval == 0:
+            checkpoint_callback(iteration, best, "running")
+
+        # Pruning cat nhanh config kem trong tuning. Feasibility van dung exact, chi dung de dung som run kem.
+        if prune_after > 0 and iteration >= prune_after:
+            if best.metrics.get("delivered_orders", 0) < len(context["customer_ids"]):
+                stop_reason = "pruned"
+                break
+            if prune_reference is not None and best.objective_value > float(prune_reference) * (1.0 + prune_gap):
+                stop_reason = "pruned"
+                break
+
+        # Early stopping tiet kiem thoi gian khi objective khong con cai thien dang ke.
+        if early_stop and iteration - last_significant_improvement >= patience:
+            stop_reason = "early_stopped"
+            break
+
     best = evaluate_solution(best, context, runtime_seconds=time.perf_counter() - start)
+    best.metrics["run_status"] = stop_reason
+    best.metrics["completed_iterations"] = iteration_rows[-1]["iteration"] if iteration_rows else 0
+    if checkpoint_callback:
+        checkpoint_callback(best.metrics["completed_iterations"], best, stop_reason)
     return best, pd.DataFrame(iteration_rows), pd.DataFrame(operator_rows)
 
 
