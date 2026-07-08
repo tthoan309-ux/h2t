@@ -126,7 +126,14 @@ For the report, a strong result is usually:
 
 ALNS-OC has several parameters that control the balance between routing cost, postponement risk, operator learning, and simulated annealing exploration. Tuning is needed because one debug run is not enough: ALNS contains random destroy/repair choices, so a single seed can make one configuration look better or worse by chance.
 
-The tuning module tests many parameter configurations and multiple seeds, then exports both raw and aggregated results. A full factorial grid is not practical for the full parameter space because it creates more than 200,000 configurations before multiplying by seeds. Random search is usually a better use of runtime here: it samples across the whole space and can find strong regions without evaluating every combination.
+The recommended tuning workflow is not a full factorial grid. The full parameter space creates more than 200,000 configurations before multiplying by seeds, which is not practical and not necessary. Use a four-stage process:
+
+1. Screening: small/debug runs only to verify the pipeline.
+2. Random search: sample broad regions of the full parameter space.
+3. Focused tuning: zoom into the best region using a smaller custom grid.
+4. Validation and final comparison: evaluate the selected config on unseen seeds and compare all methods fairly.
+
+Random search is usually a better use of runtime here: it samples across the whole space and can find strong regions without evaluating every combination.
 
 - Raw results keep every config/seed run, including failures. This is useful for traceability and resume mode.
 - Summary results aggregate by `config_id`, which is better for deciding which configuration is robust.
@@ -146,36 +153,48 @@ Tuned parameters:
 
 Ranking in `tuning_results_summary.csv` does not use objective alone. Completion rate is ranked first, because a low objective is misleading if a method leaves many orders undelivered. Then the ranking considers undelivered orders, objective, postponement, distance, and runtime.
 
-Quick tuning:
+### Stage 1: Quick Debug
+
+This only checks that tuning code, resume mode, and CSV exports work. Do not use this to make conclusions.
 
 ```bash
-python main.py --data ..\Data_B --out outputs --tune --tune-mode quick --iterations 500 --tune-seeds 1,2
+python main.py --data ..\Data_B --out outputs --tune --tune-mode quick --iterations 100 --tune-seeds 1 --max-configs 5 --debug --resume
 ```
 
-Quick debug:
+### Stage 2: Screening Search
 
-```bash
-python main.py --data ..\Data_B --out outputs --tune --tune-mode quick --iterations 100 --tune-seeds 1 --max-configs 5 --debug
-```
-
-Random tuning:
+Use random search to sample the full space without enumerating all combinations.
 
 ```bash
 python main.py --data ..\Data_B --out outputs --tune --tune-mode full --search-strategy random --n-configs 50 --iterations 1500 --tune-seeds 1,2,3 --resume
 ```
 
-Final tuning:
+For a lighter first pass:
 
 ```bash
-python main.py --data ..\Data_B --out outputs --tune --tune-mode full --search-strategy random --n-configs 100 --iterations 3000 --tune-seeds 1,2,3,4,5 --resume
+python main.py --data ..\Data_B --out outputs --tune --tune-mode full --search-strategy random --n-configs 10 --iterations 300 --tune-seeds 1 --resume --debug
 ```
 
-Full mode defaults to random search if `--search-strategy` is omitted. You can still force full factorial grid search with `--search-strategy grid`, but that is usually too large for final experiments.
+### Stage 3: Focused Tuning
 
-Latin sampling:
+After screening, inspect `outputs/tuning/top_10_configs.csv`. If the best configs concentrate around a region, use the provided focused grid:
 
 ```bash
-python main.py --data ..\Data_B --out outputs --tune --tune-mode full --search-strategy latin --n-configs 50 --iterations 1500 --tune-seeds 1,2,3 --resume
+python main.py --data ..\Data_B --out outputs --tune --tune-mode custom --grid-file config_grid_focused.json --iterations 2000 --tune-seeds 1,2,3 --resume
+```
+
+### Stage 4: Validation And Final Comparison
+
+Validate the selected config on seeds that were not used during tuning:
+
+```bash
+python main.py --data ..\Data_B --out outputs --use-best-config outputs\tuning\best_config.json --iterations 5000 --seeds 4,5,42
+```
+
+Then run the final fair comparison using the same iteration budget for ALNS-Base, ALNS-OC default, and ALNS-OC tuned:
+
+```bash
+python main.py --data ..\Data_B --out outputs --use-best-config outputs\tuning\best_config.json --iterations 5000 --seeds 1,2,3,4,5
 ```
 
 Custom tuning grid:
@@ -193,6 +212,14 @@ python main.py --data ..\Data_B --out outputs --tune --tune-mode quick --iterati
 Resume mode skips `config_id + seed` pairs already marked `success` in `outputs/tuning/tuning_results_raw.csv`. This matters for long experiments where the run may be interrupted.
 
 `--n-configs` is preferred for large tuning because it samples configurations across the whole parameter space. `--max-configs` is still available for debugging, but it simply takes the first N configurations from the generated list.
+
+Full mode defaults to random search if `--search-strategy` is omitted. You can still force full factorial grid search with `--search-strategy grid`, but that is usually too large for final experiments.
+
+Latin sampling is also available:
+
+```bash
+python main.py --data ..\Data_B --out outputs --tune --tune-mode full --search-strategy latin --n-configs 50 --iterations 1500 --tune-seeds 1,2,3 --resume
+```
 
 Tuning outputs:
 

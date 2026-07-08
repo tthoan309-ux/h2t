@@ -1,0 +1,13 @@
+{
+  "eta_oc": [0.3, 0.5, 0.7],
+  "theta_postponement": [1000, 2000, 3000],
+  "phi_delivery_day": [500, 750, 1000],
+  "rho_operator_learning": [0.1, 0.2],
+  "temperature_initial": [500, 1000],
+  "cooling_rate": [0.995, 0.998],
+  "removal_fraction_min": [0.05],
+  "removal_fraction_max": [0.15, 0.2],
+  "use_slack_penalty": [true],
+  "use_early_day_repair": [true],
+  "use_relocate_to_earlier_day": [true]
+}
