@@ -112,6 +112,16 @@ This makes completion dominate distance, which matches the competition goal: del
 - `outputs/logs/alns_run.log`: preprocessing, baseline, and ALNS progress logs.
 - Optional plots: `objective_progress.png` and `method_comparison.png`.
 
+## Codegraph
+
+The project flow is documented with Mermaid diagrams in:
+
+```text
+docs/codegraph_project_flow.md
+```
+
+It covers the top-level runtime, feasibility spine, ALNS loop, opportunity-cost flow, tuning pipeline, module dependencies, and output artifacts.
+
 ## Interpreting `results_comparison.csv`
 
 Compare methods first by `delivered_orders` and `completion_rate`, then by `objective`. If two methods deliver the same number of orders, use `postponement_penalty`, `total_distance`, `total_waiting_time`, and `min_slack` to explain operational quality. Total distance includes the return from the last customer back to the depot; this return leg appears as a depot row in each schedule file and as `return_to_depot_distance` in `daily_route_summary.csv`.
